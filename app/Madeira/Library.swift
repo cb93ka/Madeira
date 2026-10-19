@@ -2937,20 +2937,22 @@ struct LibraryPointerSettings: View {
     @ObservedObject private var input = InputSettings.shared
     /// Absolute, Relative or Touch; `touchMode` and `relative` stay mutually exclusive.
     private var mode: Binding<String> {
-        Binding(get: { input.touchMode ? "touch" : (input.relative ? "relative" : "absolute") }, set: { value in
-            input.touchMode = value == "touch"; input.relative = value == "relative"
+        Binding(get: { input.touchMode ? "touch" : (input.relative ? "relative" : (input.hybrid ? "hybrid" : "absolute")) }, set: { value in
+            input.touchMode = value == "touch"; input.relative = value == "relative"; input.hybrid = value == "hybrid"
             fputs("[frontend-pointer] mode=\(value)\n", stderr)
         })
     }
     var body: some View {
         Picker("Pointer mode", selection: mode) {
-            Text("Absolute").tag("absolute"); Text("Relative").tag("relative"); Text("Touch").tag("touch")
+            Text("Absolute").tag("absolute"); Text("Relative").tag("relative"); Text("1+2").tag("hybrid"); Text("Touch").tag("touch")
         }.pickerStyle(.segmented)
         Text(input.touchMode ? "Tap the screen to position and click. Hold and move to drag. Two fingers: right click or scroll."
-             : (input.relative ? "Drag to send relative mouse movement for mouse-look. Tap to click." : "Drag the pointer like a trackpad. Tap to click."))
+             : (input.relative ? "Drag to send relative mouse movement for mouse-look. Tap to click."
+                : input.hybrid ? "Pointer while the game shows its cursor, mouse-look while it hides it. Tap to click."
+                : "Drag the pointer like a trackpad. Tap to click."))
             .font(.caption).foregroundStyle(.secondary)
         LabeledContent("Touch sensitivity") {
-            Slider(value: input.relative ? $input.sensRel : $input.sensAbs, in: 0.1...8)
+            Slider(value: input.relative || input.hybrid ? $input.sensRel : $input.sensAbs, in: 0.1...8)
         }
     }
 }

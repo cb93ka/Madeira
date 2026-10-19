@@ -326,7 +326,8 @@ final class MetalBackedView: UIView {
     }()
     /// Drags move the camera (relative motion), not the cursor.
     private var lookMode: Bool {
-        InputSettings.shared.relative || (Self.touchHybrid && winios_cursor_shown() == 0)
+        InputSettings.shared.relative
+            || ((Self.touchHybrid || InputSettings.shared.hybrid) && winios_cursor_shown() == 0)
     }
     /// Taps click. Off in plain Relative mode (ml643), on in hybrid mode.
     private var tapsClick: Bool { !InputSettings.shared.relative }
@@ -1127,6 +1128,10 @@ final class InputSettings: ObservableObject {
     /// the finger is, hold or move to drag. Checked before `relative`; the
     /// library's pointer picker keeps the two mutually exclusive.
     @Published var touchMode = false { didSet { save() } }
+    /// marik: "1+2" mode. The trackpad is a pointer while the program shows its
+    /// cursor and mouse-look while it hides it (MetalBackedView.lookMode). Exclusive
+    /// with `relative` and `touchMode`; env.MADEIRA_TOUCH_HYBRID = 1 forces it on.
+    @Published var hybrid = false { didSet { save() } }
     /// ml649: heavy diagnostics. Default OFF so the shipped default is the fast
     /// path; flip it on only when a run needs to be explainable.
     @Published var diagnostics = false { didSet { madeira_set_diag_enabled(diagnostics ? 1 : 0); save() } }
@@ -1159,6 +1164,7 @@ final class InputSettings: ObservableObject {
             sensAbs  = j["sensAbs"]  as? Double ?? 2.0
             sensRel  = j["sensRel"]  as? Double ?? 2.0
             touchMode = j["touchMode"] as? Bool ?? false
+            hybrid = j["hybrid"] as? Bool ?? false
             diagnostics = j["diagnostics"] as? Bool ?? false
             sensMouse = j["sensMouse"] as? Double ?? 1.0
             ignoreTouchesWithMouse = j["ignoreTouchesWithMouse"] as? Bool ?? true
@@ -1173,7 +1179,7 @@ final class InputSettings: ObservableObject {
         let j: [String: Any] = ["relative": relative, "sensAbs": sensAbs, "sensRel": sensRel, "diagnostics": diagnostics,
                                 "sensMouse": sensMouse, "ignoreTouchesWithMouse": ignoreTouchesWithMouse,
                                 "padRightStickMouse": padRightStickMouse,
-                                "touchMode": touchMode]
+                                "touchMode": touchMode, "hybrid": hybrid]
         guard let d = try? JSONSerialization.data(withJSONObject: j) else { return }
         try? d.write(to: Self.url, options: .atomic)
     }
@@ -1475,14 +1481,17 @@ struct ContentView: View {
     private var pointerModeToggle: some View {
         Button {
             // Touch mode is chosen in the library; this button leaves it for Absolute.
-            if input.touchMode { input.touchMode = false; input.relative = false }
-            else { input.relative.toggle() }
+            // marik: Absolute -> Relative -> 1+2 (hybrid) -> Absolute.
+            if input.touchMode { input.touchMode = false; input.relative = false; input.hybrid = false }
+            else if input.relative { input.relative = false; input.hybrid = true }
+            else if input.hybrid { input.hybrid = false }
+            else { input.relative = true }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         } label: {
-            Text(input.touchMode ? "Touch" : input.relative ? "Relative" : "Absolute")
+            Text(input.touchMode ? "Touch" : input.relative ? "Relative" : input.hybrid ? "1+2" : "Absolute")
                 .font(.system(size: 13, weight: .semibold))
                 .frame(minWidth: 82, minHeight: 32)
-                .background((input.relative ? Color.accentColor : Color.secondary).opacity(0.28))
+                .background((input.relative || input.hybrid ? Color.accentColor : Color.secondary).opacity(0.28))
                 .cornerRadius(6)
         }
         .transition(.opacity)
@@ -1492,8 +1501,8 @@ struct ContentView: View {
     /// independently and both persist.
     private var pointerSensSlider: some View {
         HStack(spacing: 8) {
-            Slider(value: input.relative ? $input.sensRel : $input.sensAbs, in: 0.10...8.0)
-            Text(String(format: "%.2f", input.relative ? input.sensRel : input.sensAbs))
+            Slider(value: input.relative || input.hybrid ? $input.sensRel : $input.sensAbs, in: 0.10...8.0)
+            Text(String(format: "%.2f", input.relative || input.hybrid ? input.sensRel : input.sensAbs))
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundColor(.secondary)
                 .frame(width: 38, alignment: .trailing)

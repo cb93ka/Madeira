@@ -890,9 +890,19 @@ jobs:
           APP=Payload/Madeira.app
           NEW="$GITHUB_WORKSPACE/build-out/Madeira.xcarchive/Products/Applications/Madeira.app"
           ls -la "$NEW" | head -40
-          for f in Madeira Madeira.debug.dylib __preview.dylib; do
-            if [ -f "$NEW/$f" ]; then cp -f "$NEW/$f" "$APP/$f"; echo "replaced $f"; fi
-          done
+          codesign -d --entitlements :- "$APP/Madeira" > /tmp/ent.plist 2>/dev/null; cat /tmp/ent.plist; echo
+          if [ -f "$NEW/Madeira.debug.dylib" ]; then
+            for f in Madeira Madeira.debug.dylib __preview.dylib; do
+              if [ -f "$NEW/$f" ]; then cp -f "$NEW/$f" "$APP/$f"; echo "replaced $f"; fi
+            done
+          else
+            # An archive links one whole binary: the release's debug dylib would be dead weight.
+            cp -f "$NEW/Madeira" "$APP/Madeira"; rm -f "$APP/Madeira.debug.dylib" "$APP/__preview.dylib"
+            echo "replaced Madeira (whole binary), dropped the release's debug dylib"
+          fi
+          # Sideloaders keep the entitlements they find in the binary's signature.
+          codesign -f -s - --entitlements /tmp/ent.plist "$APP/Madeira"
+          codesign -d --entitlements :- "$APP/Madeira" 2>/dev/null; echo
           cp -Rf "$GITHUB_WORKSPACE"/marik/overlay/* "$APP"/
           echo "-- overlay --"; (cd "$GITHUB_WORKSPACE/marik/overlay" && find . -type f) 
           strings -a "$APP/Madeira.debug.dylib" | grep -c "marik" || true

@@ -1733,7 +1733,17 @@ void winios_cursor_set(unsigned int cur_id, int w, int h, int hot_x, int hot_y, 
     });
 }
 
+/* marik: whether the program shows its cursor in the desktop session, for the
+ * touch trackpad's hybrid mode (ContentView, MADEIRA_TOUCH_HYBRID). 1 until a
+ * program hides it. */
+static atomic_int g_cursor_shown = 1;
+
+int winios_cursor_shown(void) {
+    return atomic_load_explicit(&g_cursor_shown, memory_order_relaxed);
+}
+
 void winios_cursor_show(int show) {
+    atomic_store_explicit(&g_cursor_shown, show ? 1 : 0, memory_order_relaxed);
     dispatch_async(dispatch_get_main_queue(), ^{
         if (g_cursor_layer) g_cursor_layer.hidden = !show;
     });

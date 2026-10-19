@@ -315,6 +315,22 @@ final class MetalBackedView: UIView {
 
     private var touchPointerMode: Bool { InputSettings.shared.touchMode }
 
+    /// marik: env.MADEIRA_TOUCH_HYBRID = 1 in madeira.cfg. While the program shows
+    /// its cursor the trackpad is a pointer (taps click); once it hides the cursor
+    /// (mouse-look) a drag posts relative motion like Relative mode, so the camera
+    /// never stops at the screen edge, and taps still click. Read once, after Wine
+    /// exported madeira.cfg.
+    private static let touchHybrid: Bool = {
+        guard let v = getenv("MADEIRA_TOUCH_HYBRID") else { return false }
+        return v.pointee != 0 && v.pointee != 48   // set and not "0"
+    }()
+    /// Drags move the camera (relative motion), not the cursor.
+    private var lookMode: Bool {
+        InputSettings.shared.relative || (Self.touchHybrid && winios_cursor_shown() == 0)
+    }
+    /// Taps click. Off in plain Relative mode (ml643), on in hybrid mode.
+    private var tapsClick: Bool { !InputSettings.shared.relative }
+
     private func tmResetGesture() {
         tmDownPoints.removeAll()
         tmGestureDownPoint = .zero
@@ -540,7 +556,7 @@ final class MetalBackedView: UIView {
                   !self.movedBeyondSlop, !self.twoFingerActive,
                   // ml643: in mouse-look the finger is the CAMERA, not a pointer.
                   // Holding still to line up a shot must not press the mouse.
-                  !InputSettings.shared.relative else { return }
+                  !self.lookMode else { return }
             self.dragActive = true
             self.dragTouch = t
             self.postPointer(self.F_LDOWN)
@@ -607,7 +623,7 @@ final class MetalBackedView: UIView {
          * slides left, so a target to the RIGHT of the crosshair is pulled onto it
          * by dragging RIGHT. That is the same sign as a mouse. Negate both terms
          * for content-drag (finger-follows-world) feel. */
-        if InputSettings.shared.relative {
+        if lookMode {
             let sens = CGFloat(InputSettings.shared.sensRel)
             relCarryX += dx * sens
             relCarryY += dy * sens
@@ -643,7 +659,7 @@ final class MetalBackedView: UIView {
         if twoFingerActive {
             if activeTouches(event).isEmpty {
                 if !twoFingerMoved && now - twoFingerStartTime < 0.40
-                    && !InputSettings.shared.relative {   // ml643: see touchesBegan
+                    && tapsClick {   // ml643: see touchesBegan
                     postPointer(F_RDOWN)
                     postPointer(F_RUP)
                 }
@@ -666,7 +682,7 @@ final class MetalBackedView: UIView {
         // stationary release before the 0.5s drag threshold = click.
         // ml643: NOT in relative mode — every small aim adjustment would fire the
         // weapon. Left/right click are on-screen buttons there instead.
-        if !movedBeyondSlop && now - touchStartTime < 0.5 && !InputSettings.shared.relative {
+        if !movedBeyondSlop && now - touchStartTime < 0.5 && tapsClick {
             fputs("[trackpad] ended: click\n", stderr)
             postPointer(F_LDOWN)
             postPointer(F_LUP)

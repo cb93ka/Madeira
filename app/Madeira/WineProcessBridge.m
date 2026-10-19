@@ -1102,6 +1102,17 @@ static void *wine_process_thread(void *arg) {
                     LOG("madeira.cfg env: %{public}s=%{public}s", k.UTF8String, v.UTF8String);
                     fprintf(stderr, "[madeira-env] ml1062 %s=%s\n", k.UTF8String, v.UTF8String);
                 }
+                /* marik: the GDI handle table is section-backed in every session, not
+                 * only in Dock sessions (ContentView startDock). A Desktop session
+                 * starts 64-bit explorer first, so win32u's default kept the table in
+                 * private host memory and every 32-bit program started from it (Inno
+                 * Setup, NSIS, 7-Zip installers) truncated its address and faulted on
+                 * its first window class. env.MADEIRA_GDI_SHARED_SECTION = 0 in
+                 * madeira.cfg still restores the old default. */
+                if (!getenv("MADEIRA_GDI_SHARED_SECTION")) {
+                    setenv("MADEIRA_GDI_SHARED_SECTION", "1", 0);
+                    fprintf(stderr, "[madeira-env] marik MADEIRA_GDI_SHARED_SECTION=1 (default)\n");
+                }
                 /* Fastsync is the default sync engine: with neither inproc-sync nor
                  * env.MADEIRA_FASTSYNC in madeira.cfg, Wine gets MADEIRA_FASTSYNC=auto,
                  * the value Settings > Sync engine > Fastsync writes. Never overrides a

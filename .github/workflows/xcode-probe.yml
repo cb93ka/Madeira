@@ -1,0 +1,19 @@
+name: Xcode probe
+on:
+  workflow_dispatch:
+  push:
+    branches: [marik-0.1.3]
+    paths: [".github/workflows/xcode-probe.yml"]
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, macos-15, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - run: |
+          sw_vers
+          ls -d /Applications/Xcode*.app
+          for x in /Applications/Xcode*.app; do echo "$x: $(DEVELOPER_DIR=$x/Contents/Developer xcrun --sdk iphoneos --show-sdk-version 2>/dev/null)"; done

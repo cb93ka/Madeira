@@ -221,6 +221,12 @@ jobs:
             echo "#ifndef SONAME_LIBGNUTLS"
             echo "#define SONAME_LIBGNUTLS \"libgnutls.so.30\""
             echo "#endif"
+            echo "/* marik: the developer's config.h comes from a macOS configure, which"
+            echo " * finds <net/route.h>; the iPhoneOS SDK has none and the nsi providers"
+            echo " * take it from build/ntdll-unix/shims/net/route.h. */"
+            echo "#ifndef HAVE_NET_ROUTE_H"
+            echo "#define HAVE_NET_ROUTE_H 1"
+            echo "#endif"
             echo "#ifndef HAVE_GNUTLS_CIPHER_INIT"
             echo "#define HAVE_GNUTLS_CIPHER_INIT 1"
             echo "#endif"
@@ -326,6 +332,19 @@ jobs:
             build/gnutls-ios/obj
             build/gnutls-ios/src
           key: gnutls-ios-gmp6.3.0-nettle3.10.1-gnutls3.8.9-v1
+
+      # server_ios.c's [xp] log line reads rusage_info_v6.ri_page_wait_time_mach,
+      # which only newer SDKs than the runner's declare. Logging only.
+      - name: Patch ri_page_wait_time_mach for older SDKs
+        shell: bash
+        run: |
+          H="$(xcrun --sdk iphoneos --show-sdk-path)/usr/include/sys/resource.h"
+          if grep -q ri_page_wait_time_mach "$H"; then
+            echo "SDK declares ri_page_wait_time_mach"
+          else
+            sed -i '' 's/XP_MS( ru.ri_page_wait_time_mach - pru.ri_page_wait_time_mach )/0.0/' build/ntdll-unix/server_ios.c
+            grep -c ri_page_wait_time_mach build/ntdll-unix/server_ios.c || true
+          fi
 
       - name: Build ntdll-unix
         # Keep going so one run reports every broken stage (and caches FEX and

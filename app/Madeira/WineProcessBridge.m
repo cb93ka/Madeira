@@ -17,6 +17,7 @@
 #include <sys/socket.h>
 #include <setjmp.h>
 #include <stdlib.h>
+#include <strings.h>
 #include <errno.h>
 #include <dirent.h>
 #include "../../build/madeira_cfg.h"   /* ml1095: one config file */
@@ -1154,6 +1155,29 @@ static void *wine_process_thread(void *arg) {
         // Set MADEIRA_EXE=hello-x64.exe in env to launch the ARM64EC test path.
         const char *madeira_exe = getenv("MADEIRA_EXE");
         if (!madeira_exe || !*madeira_exe) madeira_exe = "cube.exe";
+        /* marik: full-precision x87 in the Desktop session. FEX's WOW64 module
+         * defaults 32-bit guests to X87ReducedPrecision=1 (games run much faster),
+         * but Delphi's System.Move copies memory through FILD/FISTP qwords, and a
+         * double keeps only 53 bits: old Inno Setup installers (GOG) turned
+         * C:\windows\system32\shell32.dll into D:\windows\systdm32\thell320dll.dll
+         * and stopped with "path not found". The Desktop session is where
+         * installers run, so it gets 80-bit x87 unless madeira.cfg says otherwise;
+         * a game started directly keeps the fast default. */
+        {
+            static int marik_x87_set;
+            const char *base = strrchr(madeira_exe, '\\');
+            base = base ? base + 1 : madeira_exe;
+            if (!strcasecmp(base, "explorer.exe")) {
+                if (!getenv("FEX_X87REDUCEDPRECISION")) {
+                    setenv("FEX_X87REDUCEDPRECISION", "0", 1);
+                    marik_x87_set = 1;
+                    fprintf(stderr, "[madeira-env] marik FEX_X87REDUCEDPRECISION=0 (Desktop session)\n");
+                }
+            } else if (marik_x87_set) {
+                unsetenv("FEX_X87REDUCEDPRECISION");
+                marik_x87_set = 0;
+            }
+        }
         // Heuristic: x86_64 guest exes (cube-x64, hello-x64, real games like
         // Thumper) need the arm64ec-windows bundle (ARM64EC hybrid system
         // DLLs that interop with FEX-translated x86_64 code). ARM64-native

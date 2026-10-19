@@ -13,5 +13,6 @@ and grafted into the official v0.1.3 IPA:
 - `overlay/`: prebuilt DLLs copied over the bundle
   - `aarch64-windows/wow64win.dll`: class atoms are not pointers (madeira/wow64win-atom-fix.patch)
   - `i386-windows/d3d9-emulated.dll`: DXMT d3d9 zeroes each packed constant block (Postal 2 purple flicker)
+  - `arm64ec-windows/gdiplus.dll`, `mlang.dll`: Wine modules the farm lacked (Factorio imports gdiplus; gdiplus delay-loads mlang)
   - `arm64ec-windows/wintypes.dll`: missing Wine module for Unity IL2CPP (issue #230)
   - `nls/c_*.nls`: the Windows ANSI/OEM/ISO code page tables the bundle lacked (no Mac 100xx or EBCDIC: with c_10000.nls present explorer.exe crashed on Start > Run) (it shipped 1252, 437, 20127, 28591 only). An Inno Setup 5 installer running in a non-1252 language (GOG) failed "Cannot Import REGQUERYSTRINGVALUE": its AnsiString conversions got empty names.

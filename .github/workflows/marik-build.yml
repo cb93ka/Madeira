@@ -772,6 +772,19 @@ jobs:
         run: bash build/stage-licenses.sh
 
       # docs/BUILDING.md: "Debug is the configuration that runs the games;
+      # StikJIT.xcframework's interfaces come from Swift 6.4 and use module
+      # selectors (Swift::String), which the runner's Swift cannot parse. Only
+      # MadeiraJITHelper imports it, and the graft keeps the release's own
+      # helper, so plain names are enough to get it compiled.
+      - name: Rewrite StikJIT module selectors for older Swift
+        shell: bash
+        run: |
+          for f in app/Frameworks/StikJIT.xcframework/*/StikJIT.framework/Modules/StikJIT.swiftmodule/*.swiftinterface; do
+            sed -E -i '' -e 's/StikJIT::StikJIT\.StikJIT::/StikJIT./g' \
+              -e 's/(Swift|Foundation|_Concurrency|StikJIT)::([A-Za-z_])/\2/g' "$f"
+            echo "$f: $(grep -c '::' "$f" || true) selectors left"
+          done
+
       - name: Archive (unsigned)
         shell: bash
         run: |

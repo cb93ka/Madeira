@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: ${{ vars.MARIK_RUNNER || 'macos-26' }}
     permissions:
       contents: read
     timeout-minutes: 360

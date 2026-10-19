@@ -785,6 +785,11 @@ jobs:
             echo "$f: $(grep -c '::' "$f" || true) selectors left"
           done
 
+      # Folders the project copies as resources but the repository leaves out;
+      # the graft keeps the release's own copies.
+      - name: Create untracked resource folders
+        run: mkdir -p app/Madeira/x86_64-vcruntime app/Madeira/i386-windows
+
       - name: Archive (unsigned)
         shell: bash
         run: |

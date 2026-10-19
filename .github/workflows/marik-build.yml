@@ -194,6 +194,19 @@ jobs:
           make -C wine/build-macos include -j"$(sysctl -n hw.ncpu)" > "$GITHUB_WORKSPACE/make-include.log" 2>&1 || true
           cp -n wine/build-native/include/*.h wine/build-macos/include/ 2>/dev/null || true
           CFG=wine/build-macos/include/config.h
+          # marik: the developer's build-macos is a native macOS configure (it
+          # also builds winebuild there), and the iOS sources say so: "the macOS
+          # config.h announces" headers the iPhoneOS SDK lacks, which they #undef
+          # or shim. An iPhoneOS-configured config.h differs in HAVE_* macros the
+          # unix side branches on (32-bit Postal 2 died in its first guest
+          # instructions with it), so use the native tree's config.h.
+          if [ -f wine/build-native/include/config.h ]; then
+            cp "$CFG" "$GITHUB_WORKSPACE/config-ios-configure.h" 2>/dev/null || true
+            cp wine/build-native/include/config.h "$CFG"
+            diff <(grep -E '^#define (HAVE|SONAME)' "$GITHUB_WORKSPACE/config-ios-configure.h" | sort) \
+                 <(grep -E '^#define (HAVE|SONAME)' "$CFG" | sort) > "$GITHUB_WORKSPACE/config-diff.log" || true
+            echo "config.h now from the native macOS configure; $(wc -l < "$GITHUB_WORKSPACE/config-diff.log") differing lines"
+          fi
           {
             echo ""
             echo "/* iOS SDK fixups appended by CI */"

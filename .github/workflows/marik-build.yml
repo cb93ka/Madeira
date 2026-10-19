@@ -339,6 +339,15 @@ jobs:
       # makes to these same names, which is why the first version of this
       # check passed while the linker still failed. -gU = external AND
       # defined only.
+      - name: Show ntdll-unix compile errors
+        if: always()
+        shell: bash
+        run: |
+          for f in build/ntdll-unix/obj/*.err; do
+            [ -s "$f" ] || continue
+            echo "===== $f ====="; head -c 4000 "$f"
+          done
+
       - name: Verify ntdll-unix exports the crypto call tables
         continue-on-error: true
         shell: bash
@@ -477,6 +486,10 @@ jobs:
           else:
               print("::warning::AllocatorHooks.cpp anchor moved -- left as is")
           PYEOF
+
+      - name: Guard FEX diagnostic probes for the iOS static-lib target
+        if: steps.fexcache.outputs.cache-hit != 'true'
+        run: python3 marik/ci/patch-fex-ios-probes.py
 
       - name: Build FEX for iOS
         if: steps.fexcache.outputs.cache-hit != 'true'

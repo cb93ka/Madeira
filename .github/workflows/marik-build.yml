@@ -65,6 +65,14 @@ jobs:
       # 13m25s of a 21m37s run was spent rebuilding wine's host tools, every
       # time, for a submodule that does not move. Key the cache on the wine
       # revision so it rebuilds exactly when wine actually changes.
+      - name: Apply marik Wine patches
+        shell: bash
+        run: |
+          for p in marik/patches/wine-*.patch; do
+            [ -f "$p" ] || continue
+            git -C wine apply --verbose "$GITHUB_WORKSPACE/$p"
+          done
+
       - name: Wine submodule revision
         id: winerev
         shell: bash

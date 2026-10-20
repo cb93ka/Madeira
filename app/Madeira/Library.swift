@@ -1888,6 +1888,10 @@ struct LibraryView: View {
         jit.connectionProblem.flatMap { model.error == $0.message ? $0 : nil }
     }
     @State private var browser = false
+    /// marik: disc images (DiscImages): the ISO picker, and the unpacking in progress.
+    @State private var discImport = false
+    @State private var discBusy: String?
+    @State private var discMounted = DiscImages.mounted()
     @State private var selected: LibraryEntry?
     @State private var search = ""
     /// The Settings tab's own search text, kept apart from the library's.
@@ -1956,6 +1960,16 @@ struct LibraryView: View {
             Button("OK", role: .cancel) { model.error = nil }
         } message: { Text(model.error ?? "") }
         .fullScreenCover(isPresented: $onboarding.presented) { OnboardingView() }
+        .fileImporter(isPresented: $discImport, allowedContentTypes: DiscImages.contentTypes) { result in
+            guard case .success(let url) = result else { return }
+            insertDisc(url)
+        }
+        .overlay {
+            if let discBusy {
+                VStack(spacing: 12) { ProgressView(); Text(discBusy).font(.callout) }
+                    .padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            }
+        }
         .onAppear {
             // An ended desktop session's surface never stays over the library.
             EndedSessionSurface.install(); EndedSessionSurface.hide(reason: "library-appeared")
@@ -1969,6 +1983,31 @@ struct LibraryView: View {
             if selected == nil, !browser, !onboarding.presented, command == "tab" { switchTab(to: 1 - tab) }
         }
     }
+    /// marik: unpack an ISO off the main thread and put it in drive D:.
+    private func insertDisc(_ url: URL) {
+        discBusy = "Reading the disc image…"
+        Task.detached(priority: .userInitiated) {
+            let access = url.startAccessingSecurityScopedResource()
+            defer { if access { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let disc = try DiscImages.insert(iso: url) { done, total in
+                    Task { @MainActor in discBusy = String(format: "Unpacking the disc… %d%%", total > 0 ? Int(done * 100 / total) : 0) }
+                }
+                await MainActor.run {
+                    discBusy = nil; discMounted = DiscImages.mounted()
+                    model.error = "Disc \"\(disc.label)\" is in drive D: (CD-ROM). Start the game or its installer from the Desktop or the library."
+                }
+            } catch {
+                await MainActor.run { discBusy = nil; discMounted = DiscImages.mounted(); model.error = "Couldn't insert the disc: \(error.localizedDescription)" }
+            }
+        }
+    }
+
+    private func ejectDisc() {
+        do { try DiscImages.eject(); discMounted = DiscImages.mounted() }
+        catch { model.error = "Couldn't eject the disc: \(error.localizedDescription)" }
+    }
+
     @ToolbarContentBuilder private var libraryToolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
@@ -1983,6 +2022,12 @@ struct LibraryView: View {
                     Label("Name", systemImage: "textformat.abc").tag("name")
                     Label("Recently added", systemImage: "plus").tag("added")
                     Label("Folder size", systemImage: "internaldrive").tag("size")
+                }
+                Section("Disc") {
+                    Button { discImport = true } label: { Label("Insert disc image (ISO)…", systemImage: "opticaldisc") }
+                    if let discMounted {
+                        Button(role: .destructive) { ejectDisc() } label: { Label("Eject \(discMounted) from D:", systemImage: "eject") }
+                    }
                 }
             } label: { Label("Library options", systemImage: "line.3.horizontal.decrease") }
         }
@@ -3446,5 +3491,193 @@ enum EndedSessionSurface {
         hiddenByUs = false
         _ = winios_compositor_set_hidden(0)
         LogStore.shared.log("[library-surface] desktop shown for the new session")
+    }
+}
+
+
+// MARK: - Disc images (marik)
+
+/// ISO 9660 / Joliet disc images as Wine CD-ROM drives.
+///
+/// iOS cannot mount an image, so the image is unpacked into
+/// <prefix>/discs/<name> and dosdevices/d: points at that folder. The volume
+/// label and the serial Windows would compute for the disc go into
+/// .windows-label and .windows-serial at its root; ntdll (marik patch
+/// wine-file-disc.patch, ios_disc_root) answers for anything under discs/ as a
+/// CD-ROM with the CDFS file system and that label and serial. One disc at a
+/// time, in D:. UDF-only images (no ISO 9660 tree) are refused by name.
+enum DiscImages {
+    struct Disc { var name: String; var label: String }
+    enum Failure: LocalizedError {
+        case notISO, noTree, sessionRunning, io(String)
+        var errorDescription: String? {
+            switch self {
+            case .notISO: return "This file is not an ISO 9660 disc image."
+            case .noTree: return "The image has no ISO 9660 file tree (a UDF-only DVD image is not supported yet)."
+            case .sessionRunning: return "Close the running game or Desktop session first."
+            case .io(let what): return what
+            }
+        }
+    }
+
+    static let contentTypes: [UTType] = [UTType(filenameExtension: "iso"), .diskImage, .data].compactMap { $0 }
+    static let sector = 2048
+
+    static var prefix: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("wine")
+    }
+    static var discsDir: URL { prefix.appendingPathComponent("discs") }
+    static var driveLink: URL { prefix.appendingPathComponent("dosdevices/d:") }
+
+    /// The disc folder D: points at, if it is one of ours.
+    static func mounted() -> String? {
+        guard let dest = try? FileManager.default.destinationOfSymbolicLink(atPath: driveLink.path),
+              dest.hasPrefix("../discs/") else { return nil }
+        return String(dest.dropFirst("../discs/".count))
+    }
+
+    static func eject() throws {
+        guard wine_process_is_running() == 0 else { throw Failure.sessionRunning }
+        guard let name = mounted() else { return }
+        try? FileManager.default.removeItem(at: driveLink)
+        try FileManager.default.removeItem(at: discsDir.appendingPathComponent(name))
+        LogStore.shared.log("[disc] ejected \(name) from D:")
+    }
+
+    /// Unpacks iso and puts it in D:. progress(bytesDone, bytesTotal).
+    static func insert(iso: URL, progress: (Int64, Int64) -> Void) throws -> Disc {
+        guard wine_process_is_running() == 0 else { throw Failure.sessionRunning }
+        guard let fh = try? FileHandle(forReadingFrom: iso) else { throw Failure.io("Can't open \(iso.lastPathComponent).") }
+        defer { try? fh.close() }
+        func read(_ lba: Int, _ count: Int) throws -> Data {
+            try fh.seek(toOffset: UInt64(lba) * UInt64(sector))
+            guard let d = try fh.read(upToCount: count), d.count == count else { throw Failure.io("The image is truncated.") }
+            return d
+        }
+        func le32(_ d: Data, _ o: Int) -> Int { Int(d[d.startIndex + o]) | Int(d[d.startIndex + o + 1]) << 8 | Int(d[d.startIndex + o + 2]) << 16 | Int(d[d.startIndex + o + 3]) << 24 }
+
+        // Volume descriptors from sector 16: the primary (type 1) and a Joliet
+        // supplementary one (type 2, escape %/@, %/C or %/E).
+        var pvd: Data?, joliet: Data?
+        for lba in 16..<64 {
+            guard let vd = try? read(lba, sector) else { break }
+            let b = [UInt8](vd)
+            guard b[1...5] == [0x43, 0x44, 0x30, 0x30, 0x31][...] else { if lba == 16 { throw Failure.notISO }; break }   // "CD001"
+            if b[0] == 1, pvd == nil { pvd = vd }
+            if b[0] == 2, b[88] == 0x25, b[89] == 0x2F, [0x40, 0x43, 0x45].contains(b[90]) { joliet = vd }
+            if b[0] == 255 { break }
+        }
+        guard let pvd else { throw Failure.notISO }
+        let tree = joliet ?? pvd
+        let unicode = joliet != nil
+
+        func name(_ raw: Data) -> String {
+            var n: String
+            if unicode {
+                var u: [UInt16] = []
+                var i = raw.startIndex
+                while i + 1 < raw.endIndex { u.append(UInt16(raw[i]) << 8 | UInt16(raw[i + 1])); i += 2 }
+                n = String(decoding: u, as: UTF16.self)
+            } else {
+                n = String(decoding: raw, as: UTF8.self)
+            }
+            if let semi = n.firstIndex(of: ";") { n = String(n[..<semi]) }
+            if n.hasSuffix(".") { n.removeLast() }
+            return n
+        }
+        func label(_ vd: Data, wide: Bool) -> String {
+            let raw = vd.subdata(in: (vd.startIndex + 40)..<(vd.startIndex + 72))
+            let text: String
+            if wide {
+                var u: [UInt16] = []
+                var i = raw.startIndex
+                while i + 1 < raw.endIndex { u.append(UInt16(raw[i]) << 8 | UInt16(raw[i + 1])); i += 2 }
+                text = String(decoding: u, as: UTF16.self)
+            } else { text = String(decoding: raw, as: UTF8.self) }
+            return text.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\0")))
+        }
+        // The serial Windows reports for a CD: the primary descriptor summed as
+        // four byte lanes (Wine's mountmgr does the same for a real disc).
+        var lanes = [UInt8](repeating: 0, count: 4)
+        for (i, byte) in [UInt8](pvd).enumerated() { lanes[i & 3] = lanes[i & 3] &+ byte }
+        let serial = UInt32(lanes[0]) << 24 | UInt32(lanes[1]) << 16 | UInt32(lanes[2]) << 8 | UInt32(lanes[3])
+
+        let volumeLabel = { () -> String in let l = label(tree, wide: unicode); return l.isEmpty ? label(pvd, wide: false) : l }()
+        let base = volumeLabel.isEmpty ? iso.deletingPathExtension().lastPathComponent : volumeLabel
+        let folder = base.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: ":", with: "_")
+        let fm = FileManager.default
+        try fm.createDirectory(at: discsDir, withIntermediateDirectories: true)
+        let root = discsDir.appendingPathComponent(folder)
+        if fm.fileExists(atPath: root.path) { try fm.removeItem(at: root) }
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+
+        // Walk the tree once for the total size, then copy.
+        struct Entry { var path: String; var lba: Int; var size: Int; var dir: Bool }
+        var entries: [Entry] = []
+        var queue: [(String, Int, Int)] = [("", le32(tree, 156 + 2), le32(tree, 156 + 10))]
+        var visited = Set<Int>()
+        while let (dirPath, lba, size) = queue.first {
+            queue.removeFirst()
+            guard visited.insert(lba).inserted, size > 0, size < 64 << 20 else { continue }
+            let data = try read(lba, (size + sector - 1) / sector * sector)
+            var o = 0
+            while o < size {
+                let len = Int(data[data.startIndex + o])
+                if len == 0 { o = (o / sector + 1) * sector; continue }
+                guard o + len <= data.count, len >= 34 else { break }
+                let rec = data.subdata(in: (data.startIndex + o)..<(data.startIndex + o + len))
+                let nameLen = Int(rec[rec.startIndex + 32])
+                let flags = rec[rec.startIndex + 25]
+                o += len
+                guard nameLen > 0, 33 + nameLen <= len else { continue }
+                let rawName = rec.subdata(in: (rec.startIndex + 33)..<(rec.startIndex + 33 + nameLen))
+                if nameLen == 1, rawName.first == 0 || rawName.first == 1 { continue }   // . and ..
+                let n = name(rawName)
+                guard !n.isEmpty, n != ".", n != "..", !n.contains("/") else { continue }
+                let path = dirPath.isEmpty ? n : dirPath + "/" + n
+                let elba = le32(rec, 2), esize = le32(rec, 10)
+                if flags & 0x02 != 0 {
+                    entries.append(Entry(path: path, lba: elba, size: 0, dir: true))
+                    queue.append((path, elba, esize))
+                } else if let last = entries.last, last.path == path, !last.dir, last.lba + (last.size + sector - 1) / sector == elba {
+                    entries[entries.count - 1].size += esize   // a multi-extent file's next extent
+                } else {
+                    entries.append(Entry(path: path, lba: elba, size: esize, dir: false))
+                }
+            }
+        }
+        guard !entries.isEmpty else { throw Failure.noTree }
+        let total = entries.reduce(Int64(0)) { $0 + Int64($1.size) }
+        var done: Int64 = 0
+        let chunk = 4 << 20
+        for e in entries {
+            let target = root.appendingPathComponent(e.path)
+            if e.dir { try fm.createDirectory(at: target, withIntermediateDirectories: true); continue }
+            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            guard fm.createFile(atPath: target.path, contents: nil), let out = try? FileHandle(forWritingTo: target) else {
+                throw Failure.io("Can't write \(e.path).")
+            }
+            defer { try? out.close() }
+            try fh.seek(toOffset: UInt64(e.lba) * UInt64(sector))
+            var left = e.size
+            while left > 0 {
+                guard let d = try fh.read(upToCount: min(chunk, left)), !d.isEmpty else { throw Failure.io("The image is truncated at \(e.path).") }
+                try out.write(contentsOf: d)
+                left -= d.count; done += Int64(d.count)
+                progress(done, total)
+            }
+        }
+        try volumeLabel.write(to: root.appendingPathComponent(".windows-label"), atomically: true, encoding: .utf8)
+        try String(format: "%08X", serial).write(to: root.appendingPathComponent(".windows-serial"), atomically: true, encoding: .utf8)
+
+        // D: -> ../discs/<folder>, replacing an earlier disc of ours (never another link).
+        if let old = mounted(), old != folder { try? fm.removeItem(at: discsDir.appendingPathComponent(old)) }
+        if (try? fm.destinationOfSymbolicLink(atPath: driveLink.path)) != nil || fm.fileExists(atPath: driveLink.path) {
+            guard mounted() != nil else { throw Failure.io("Drive D: is already used by something else in this prefix.") }
+            try fm.removeItem(at: driveLink)
+        }
+        try fm.createSymbolicLink(atPath: driveLink.path, withDestinationPath: "../discs/" + folder)
+        LogStore.shared.log("[disc] inserted \(iso.lastPathComponent) as D: label=\"\(volumeLabel)\" serial=\(String(format: "%08X", serial)) files=\(entries.filter { !$0.dir }.count) bytes=\(total) joliet=\(unicode ? 1 : 0)")
+        return Disc(name: folder, label: volumeLabel.isEmpty ? folder : volumeLabel)
     }
 }

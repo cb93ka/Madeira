@@ -16,3 +16,4 @@ and grafted into the official v0.1.3 IPA:
   - `arm64ec-windows/gdiplus.dll`, `mlang.dll`: Wine modules the farm lacked (Factorio imports gdiplus; gdiplus delay-loads mlang)
   - `arm64ec-windows/wintypes.dll`: missing Wine module for Unity IL2CPP (issue #230)
   - `nls/c_*.nls`: the Windows ANSI/OEM/ISO code page tables the bundle lacked (no Mac 100xx or EBCDIC: with c_10000.nls present explorer.exe crashed on Start > Run) (it shipped 1252, 437, 20127, 28591 only). An Inno Setup 5 installer running in a non-1252 language (GOG) failed "Cannot Import REGQUERYSTRINGVALUE": its AnsiString conversions got empty names.
+- Disc images: Library options > Disc > Insert disc image (ISO). The image (ISO 9660 / Joliet) is unpacked into wine/discs/<label> and dosdevices/d: points at it; `patches/wine-file-disc.patch` makes ntdll answer for that tree as a CD-ROM (CDFS) with the label and serial from .windows-label / .windows-serial.
